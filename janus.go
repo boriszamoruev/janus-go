@@ -432,8 +432,61 @@ func (handle *Handle) Request(body interface{}) (*SuccessMsg, error) {
 // Message sends a message request to a plugin handle on the Gateway.
 // body should be the plugin data to be passed to the plugin, and jsep should
 // contain an optional SDP offer/answer to establish a WebRTC PeerConnection.
-// On success, an EventMsg will be returned and error will be nil.
-func (handle *Handle) Message(body, jsep interface{}) (*EventMsg, error) {
+// See plugin documentation for which requests are Sync and which ones are Async
+// https://janus.conf.meetecho.com/docs/pages.html
+// Sync requests return a SuccessMsg with plugin data
+//
+// Error Example for a Sync request to create a video room:
+//
+//	{
+//		"janus": "success",
+//		"session_id": 2871703989161976,
+//		"transaction": "csapksgcemj2tp9006q0",
+//		"sender": 3598314667235418,
+//		"plugindata": {
+//			"plugin": "janus.plugin.videoroom",
+//			"data": {
+//				"videoroom": "event",
+//				"error_code": 427,
+//				"error": "Room 10 already exists"
+//			}
+//		}
+//	}
+func (handle *Handle) SyncRequest(body, jsep interface{}) (*SuccessMsg, error) {
+	req, ch := newRequest("message")
+	if body != nil {
+		req["body"] = body
+	}
+	if jsep != nil {
+		req["jsep"] = jsep
+	}
+	handle.send(req, ch)
+
+GetMessage: // No tears..
+	msg := <-ch
+	switch msg := msg.(type) {
+	case *AckMsg:
+		goto GetMessage // ..only dreams.
+	case *SuccessMsg:
+		errorText, hasError := msg.PluginData.Data["error"]
+		if hasError {
+			return nil, fmt.Errorf("janus error: %s", errorText)
+		}
+		return msg, nil
+	case *ErrorMsg:
+		return nil, msg
+	}
+
+	return nil, unexpected("message")
+}
+
+// Message sends a message request to a plugin handle on the Gateway.
+// body should be the plugin data to be passed to the plugin, and jsep should
+// contain an optional SDP offer/answer to establish a WebRTC PeerConnection.
+// See plugin documentation for which requests are Sync and which ones are Async
+// https://janus.conf.meetecho.com/docs/pages.html
+// Async requests return an EventMsg with plugin data
+func (handle *Handle) AsyncRequest(body, jsep interface{}) (*EventMsg, error) {
 	req, ch := newRequest("message")
 	if body != nil {
 		req["body"] = body
@@ -461,9 +514,11 @@ GetMessage: // No tears..
 // a new PeerConnection with a plugin.
 // candidate should be a single ICE candidate, or a completed object to
 // signify that all candidates have been sent:
-//		{
-//			"completed": true
-//		}
+//
+//	{
+//		"completed": true
+//	}
+//
 // On success, an AckMsg will be returned and error will be nil.
 func (handle *Handle) Trickle(candidate interface{}) (*AckMsg, error) {
 	req, ch := newRequest("trickle")
